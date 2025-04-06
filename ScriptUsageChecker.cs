@@ -11,7 +11,6 @@ public class ScriptUsageChecker : EditorWindow
     private string targetDirectory = "Assets/Scripts";
     private string csvOutputDirectory = "Assets";
     private bool exportCsv = false;
-    private Vector2 scrollPos;
 
     [MenuItem("Tools/スクリプト使用状況チェック")]
     public static void ShowWindow()
@@ -66,6 +65,8 @@ public class ScriptUsageChecker : EditorWindow
 
         foreach (var script in allScriptsInScene)
         {
+            if (script == null) continue;
+
             string scriptName = script.GetType().Name;
             string objectName = script.gameObject.name;
 
@@ -77,9 +78,8 @@ public class ScriptUsageChecker : EditorWindow
         }
 
         string[] scriptGuids = AssetDatabase.FindAssets("t:MonoScript", new[] { targetDirectory });
-
         List<string> csvLines = new List<string>();
-        csvLines.Add("スクリプト名,アタッチ先,使用ステータス");
+        csvLines.Add("スクリプト名,クラスの種類,アタッチ先,使用ステータス,参照元");
 
         foreach (string guid in scriptGuids)
         {
@@ -88,29 +88,76 @@ public class ScriptUsageChecker : EditorWindow
             if (monoScript == null) continue;
 
             Type scriptType = monoScript.GetClass();
-            if (scriptType == null || !typeof(MonoBehaviour).IsAssignableFrom(scriptType)) continue;
+            if (scriptType == null) continue;
 
             string scriptName = scriptType.Name;
 
-            bool hasStartOrUpdate =
-                scriptType.GetMethod("Start", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null ||
-                scriptType.GetMethod("Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null;
+            // クラスの種類を判定
+            string classType = "Unknown";
+            if (typeof(MonoBehaviour).IsAssignableFrom(scriptType))
+                classType = "MonoBehaviour";
+            else if (typeof(ScriptableObject).IsAssignableFrom(scriptType))
+                classType = "ScriptableObject";
+            else if (scriptType.IsClass)
+                classType = "Static / PlainClass";
 
+            // アタッチチェック
             bool isAttached = scriptToGameObjects.ContainsKey(scriptName);
-            string attachedTo = isAttached ? string.Join("; ", scriptToGameObjects[scriptName]) : "なし";
-            string status = (isAttached || hasStartOrUpdate) ? "使用中" : "未使用";
+            string attachedTo = isAttached ? string.Join(";", scriptToGameObjects[scriptName]) : "なし";
 
-            Debug.Log($"スクリプト: {scriptName}\n- アタッチ先: {attachedTo}\n- 使用ステータス: {status}");
+            // MonoBehaviour の Start / Update 実装チェック
+            bool hasStartOrUpdate = false;
+            if (classType == "MonoBehaviour")
+            {
+                hasStartOrUpdate =
+                    scriptType.GetMethod("Start", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null ||
+                    scriptType.GetMethod("Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null;
+            }
+
+            // 参照チェック（他スクリプトから使われているか）
+            bool isReferencedElsewhere = false;
+            List<string> referenceDetails = new List<string>();
+
+            string[] allScriptPaths = AssetDatabase.FindAssets("t:MonoScript")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => p.EndsWith(".cs") && !p.Equals(path))
+                .ToArray();
+
+            foreach (string otherScriptPath in allScriptPaths)
+            {
+                string[] lines = File.ReadAllLines(otherScriptPath);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string line = lines[i];
+                    if (
+                        line.Contains($"{scriptName}.") ||
+                        line.Contains($"new {scriptName}(") ||
+                        line.Contains($"{scriptName} ")
+                    )
+                    {
+                        isReferencedElsewhere = true;
+                        string fileName = Path.GetFileName(otherScriptPath);
+                        string cleanedLine = line.Trim().Replace("\"", "\"\"");
+                        referenceDetails.Add($"{fileName}:{i + 1}「{cleanedLine}」");
+                    }
+                }
+            }
+
+            string status = (isAttached || hasStartOrUpdate || isReferencedElsewhere) ? "使用中" : "未使用";
+
+            Debug.Log($"スクリプト: {scriptName}\n- クラスの種類: {classType}\n- アタッチ先: {attachedTo}\n- 使用ステータス: {status}");
 
             if (exportCsv)
             {
-                csvLines.Add($"{scriptName},{attachedTo},{status}");
+                string references = referenceDetails.Count > 0 ? string.Join(" | ", referenceDetails) : "";
+                csvLines.Add($"{scriptName},{classType},{attachedTo},{status},\"{references}\"");
             }
         }
 
         if (exportCsv)
         {
-            string fullPath = Path.Combine(csvOutputDirectory, "ScriptUsageReport.csv");
+            string fileName = $"ScriptUsageReport_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+            string fullPath = Path.Combine(csvOutputDirectory, fileName);
             File.WriteAllLines(fullPath, csvLines);
             AssetDatabase.Refresh();
             Debug.Log($"✅ CSV出力完了: {fullPath}");
