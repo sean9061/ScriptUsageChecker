@@ -103,16 +103,7 @@ public class ScriptUsageChecker : EditorWindow
 
             // アタッチチェック
             bool isAttached = scriptToGameObjects.ContainsKey(scriptName);
-            string attachedTo = isAttached ? string.Join(";", scriptToGameObjects[scriptName]) : "なし";
-
-            // MonoBehaviour の Start / Update 実装チェック
-            bool hasStartOrUpdate = false;
-            if (classType == "MonoBehaviour")
-            {
-                hasStartOrUpdate =
-                    scriptType.GetMethod("Start", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null ||
-                    scriptType.GetMethod("Update", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) != null;
-            }
+            string attachedTo = isAttached ? string.Join(" | ", scriptToGameObjects[scriptName]) : "なし";
 
             // 参照チェック（他スクリプトから使われているか）
             bool isReferencedElsewhere = false;
@@ -143,7 +134,7 @@ public class ScriptUsageChecker : EditorWindow
                 }
             }
 
-            string status = (isAttached || hasStartOrUpdate || isReferencedElsewhere) ? "使用中" : "未使用";
+            string status = (isAttached || isReferencedElsewhere) ? "使用中" : "未使用";
 
             Debug.Log($"スクリプト: {scriptName}\n- クラスの種類: {classType}\n- アタッチ先: {attachedTo}\n- 使用ステータス: {status}");
 
